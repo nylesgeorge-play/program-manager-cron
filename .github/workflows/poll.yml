@@ -1,0 +1,57 @@
+name: Poll program-manager
+
+# Public repo used ONLY as a free cron trigger — GitHub disables scheduled
+# workflows on private free-tier repos, but public-repo Actions have no such
+# restriction and unlimited free minutes. No app code lives here, only this file.
+#
+# Two cadences, matched by which cron fired (github.event.schedule):
+#   - hourly: Grafana / Slack / Rollbar-via-Slack / Langfuse (alert-style sources)
+#   - every 3h (offset :30 to avoid overlapping the hourly run): Metabase / KPIs / Calendar
+# A manual run (workflow_dispatch) fires both sets, for testing.
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+    - cron: '30 */3 * * *'
+  workflow_dispatch:
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_URL: https://program-manager-9l3q.onrender.com
+      TRIGGER_SECRET: ${{ secrets.TRIGGER_SECRET }}
+    steps:
+      - name: Decide which sources to hit this run
+        id: which
+        run: |
+          hourly=false
+          three_hourly=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            hourly=true
+            three_hourly=true
+          elif [ "${{ github.event.schedule }}" = "0 * * * *" ]; then
+            hourly=true
+          elif [ "${{ github.event.schedule }}" = "30 */3 * * *" ]; then
+            three_hourly=true
+          fi
+          echo "hourly=$hourly" >> "$GITHUB_OUTPUT"
+          echo "three_hourly=$three_hourly" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger hourly sources (grafana, slack, rollbar, langfuse)
+        if: steps.which.outputs.hourly == 'true'
+        run: |
+          for source in grafana slack rollbar langfuse; do
+            echo "Triggering $source..."
+            curl -sf -X POST "$RENDER_URL/internal/trigger/$source" -H "X-Trigger-Secret: $TRIGGER_SECRET"
+            echo
+          done
+
+      - name: Trigger every-3h sources (metabase, kpis, calendar)
+        if: steps.which.outputs.three_hourly == 'true'
+        run: |
+          for source in metabase kpis calendar; do
+            echo "Triggering $source..."
+            curl -sf -X POST "$RENDER_URL/internal/trigger/$source" -H "X-Trigger-Secret: $TRIGGER_SECRET"
+            echo
+          done
